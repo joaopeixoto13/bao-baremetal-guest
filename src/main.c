@@ -30,6 +30,59 @@
 
 spinlock_t print_lock = SPINLOCK_INITVAL;
 
+#ifdef DEMO_VIRTIO
+
+#include <virtio_console.h>
+
+#define VIRTIO_CONSOLE_RX_IRQ_ID (52)
+
+/*
+* The shared memory region must be within the range of the bare-metal RAM region.
+* In other words, must be within PLAT_MEM_BASE and PLAT_MEM_BASE + PLAT_MEM_SIZE.
+* This stems from the fact that the shared memory region is used by both the bare-metal
+* and the Linux backend guest, and for that reason the memory region msut be cache-coherent.
+* 
+* Example:
+* For the ZCU102 platform, the bare-metal RAM region is from 0x20000000 to 0x28000000.
+* However, we could define a shared memory region from 0x0 to 0x80000000 (2GB) if we
+* compile this guest with STD_ADDR_SPACE=y.
+*/
+static char* const shmem_base = (char*)0x50000000;
+static const long mmio_base = 0xa003e00;
+
+static struct virtio_console console;
+
+void virtio_console_rx_handler() {
+    char* msg = virtio_console_receive(&console);
+    if (msg != NULL) {
+        printf("Bare-metal received a new message: %s\n", msg);
+    }
+}
+
+void virtio_init(void)
+{
+    spin_lock(&print_lock);
+    printf("Initializing virtio console ...\n");
+    spin_unlock(&print_lock);
+
+    if (!virtio_console_init(&console, shmem_base, mmio_base)) {
+        spin_lock(&print_lock);
+        printf("virtio console initialization failed!\n");
+        spin_unlock(&print_lock);
+        while(1) wfi();
+    } else {
+        spin_lock(&print_lock);
+        printf("virtio console initialized\n");
+        spin_unlock(&print_lock);
+    }
+
+    irq_set_handler(VIRTIO_CONSOLE_RX_IRQ_ID, virtio_console_rx_handler);
+    irq_set_prio(VIRTIO_CONSOLE_RX_IRQ_ID, IRQ_MAX_PRIO);
+    irq_enable(VIRTIO_CONSOLE_RX_IRQ_ID);
+}
+
+#endif
+
 #ifdef DEMO_IPC
 
 #define SHMEM_IRQ_ID (52)
@@ -87,7 +140,11 @@ void ipi_handler(){
 }
 
 void timer_handler(){
+#ifdef DEMO_VIRTIO
+    virtio_console_transmit(&console, "Hello from the bare-metal guest, Bao!\r\n");
+#else
     printf("cpu%d: %s\n", get_cpuid(), __func__);
+#endif    
     timer_set(TIMER_INTERVAL);
     irq_send_ipi(1ull << (get_cpuid() + 1));
 }
@@ -100,6 +157,10 @@ void main(void){
         spin_lock(&print_lock);
         printf("Bao bare-metal test guest\n");
         spin_unlock(&print_lock);
+
+#ifdef DEMO_VIRTIO
+        virtio_init();
+#endif
 
         irq_set_handler(UART_IRQ_ID, uart_rx_handler);
         irq_set_handler(TIMER_IRQ_ID, timer_handler);

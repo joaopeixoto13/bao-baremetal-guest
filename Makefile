@@ -10,6 +10,10 @@ ifneq ($(DEMO_IPC),)
 CPPFLAGS+=-DDEMO_IPC
 endif
 
+ifneq ($(DEMO_VIRTIO),)
+CPPFLAGS+=-DDEMO_VIRTIO
+endif
+
 # Setup baremetal-runtime build
 include $(ROOT_DIR)/setup.mk
 
